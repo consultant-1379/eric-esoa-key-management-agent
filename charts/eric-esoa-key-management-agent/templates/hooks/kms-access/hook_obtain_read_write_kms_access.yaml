@@ -1,0 +1,339 @@
+#
+# COPYRIGHT Ericsson 2023-2024
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ template "eric-esoa-so-library-chart.name" . }}-obtain-kms-access-hook
+  annotations:
+  {{- include "eric-esoa-so-library-chart.annotations" . | nindent 4 }}
+    "helm.sh/hook": post-install, post-upgrade, post-rollback
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+  labels:
+  {{- include "eric-esoa-so-library-chart.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 8
+  template:
+    metadata:
+      annotations:
+      {{- include "eric-esoa-so-library-chart.annotations" . | nindent 8 }}
+      labels:
+      {{- include "eric-esoa-so-library-chart.labels" . | nindent 8 }}
+        eric-sec-key-management-access: "true"
+    spec:
+      serviceAccountName: {{ template "eric-esoa-key-management-agent.serviceAccountName" . }}
+      {{- if include "eric-esoa-key-management-agent.pullSecret" . }}
+      imagePullSecrets:
+        - name: {{ include "eric-esoa-key-management-agent.pullSecret" . | quote }}
+      {{- end }}
+      restartPolicy: Never
+      containers:
+        - name: kms-access-setup
+          image: {{ include "eric-esoa-key-management-agent.kmsAccessSetupPath" . }}
+          imagePullPolicy: {{ template "eric-esoa-key-management-agent.kmsAccessPullPolicy" . }}
+          securityContext:
+            allowPrivilegeEscalation: true
+            runAsNonRoot: false
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+          env:
+          # name of Agent's service account
+          - name: SERVICE_ACCOUNT_NAME
+            value: {{ include "eric-esoa-key-management-agent.serviceAccountName" . }}
+          # name of Kubernetes secret associated with Agent's service-account
+          - name: SERVICE_ACCOUNT_SECRET
+            value: {{ template "eric-esoa-key-management-agent.serviceAccountSecretName" . }}
+            # Default mount point containing CA certificate file for TLS
+            # communication to KMS
+          - name: KMS_CACERT_FILE
+            value: {{ template "eric-esoa-key-management-agent.kmsCaCertFile" . }}
+          # name of policy we want to create in KMS
+          - name: KMS_READ_WRITE_POLICY_NAME
+            value: {{ .Values.kms.credentials.policyName }}
+          # Path within KMS where we're storing credentials
+          - name: KMS_STORAGE_PATH
+            value: {{ .Values.kms.credentials.storagePath }}
+          # name of role we want to associate - prefix only, we'll tack SERVICE_ACCOUNT_NAME onto it to ensure role uniqueness
+          - name: KMS_MANAGER_ROLE_PREFIX
+            value: {{ .Values.kms.credentials.rolePrefix }}
+          command: ["bash", "-c"]
+          args:
+          - |
+            # Prints a line across the width of the terminal to split up script output and help make it more readable
+            # Colour can be changed by argument to yellow ("warn") or red ("error")
+            function separator() {
+                if [[ $1 ]]; then
+                  case "$1" in
+                  WARN|warn)
+                  COLOUR="\e[33m"
+                  ;;
+                  ERROR|error)
+                  COLOUR="\e[31m"
+                  ;;
+                  esac
+                else
+                  COLOUR="\e[37m"
+                fi
+                echo -e "\n$COLOUR$(head -c "$(tput -T xterm cols)" < /dev/zero | sed 's/./─/g')\e[0m"
+            }
+
+            # Logs a message to the console, formatted with useful information such as:
+            #   date/time stamp
+            #   level (passed by argument: INFO (default), WARN, ERROR, or DEBUG)
+            #   script line number
+            #   user, controlled by LOG_USERNAME variable if set
+            # Multi-line messages will be split into individual log lines
+            function log() {
+              LEVEL="\e[34mINFO\e[0m"
+
+              case "$1" in
+                DEBUG|debug)
+                if [[ $DEBUG_OUTPUT ]]; then
+                  LEVEL="\e[36mDEBUG\e[0m"
+                  shift
+                else
+                  return
+                fi
+                ;;
+                WARN|warn)
+                LEVEL="\e[33mWARN\e[0m"
+                shift
+                ;;
+                ERROR|error)
+                LEVEL="\e[31mERROR\e[0m"
+                shift
+                ;;
+              esac
+
+              LINE_PORTION=$(
+                if [[ -n $LINE_NUMBER ]]; then
+                  echo " - {line: $LINE_NUMBER}"
+                else
+                  echo " - {line: ${BASH_LINENO[0]}}"
+                fi
+              )
+
+              if [[ -n $LOG_USERNAME ]]; then
+                LOG_USERNAME_PORTION=" - (User: $LOG_USERNAME)"
+              else
+                unset LOG_USERNAME_PORTION
+              fi
+
+
+              if [[ "$*" = *$'\n'* ]]; then
+                echo "$*" | while read -r individual_line; do
+                  LINE_NUMBER=${BASH_LINENO[0]} log $(echo $LEVEL | sed 's/.*m\(.*\)\\e.*/\1/') "$individual_line"
+                done
+                return
+              fi
+
+              LOGGED_STRING=" - $*"
+
+              echo -e "$(date -Ins | sed 's/,\(...\).*\(\+.*\)/.\1\2/' | tr 'T' ' ') - [$LEVEL]$LINE_PORTION$LOG_USERNAME_PORTION$LOGGED_STRING"
+              unset LOGGED_STRING
+            }
+
+            # Aliases cURL with some default arguments useful when calling KMS REST API
+            function curlKms(){
+              curl --include --silent --cacert "$KMS_CACERT_FILE" "$@"
+            }
+
+            # Namespace of Kubernetes service account to grant KMS capabilities
+            # service account name already assigned to SERVICE_ACCOUNT_NAME environment variable
+            MOUNTED_SERVICE_ACCOUNT_SECRET='/run/secrets/'"$SERVICE_ACCOUNT_SECRET"
+            SERVICE_ACCOUNT_NAMESPACE=$(< "$MOUNTED_SERVICE_ACCOUNT_SECRET"/namespace) || {
+              separator error
+              log error "Error reading service account namespace in from $MOUNTED_SERVICE_ACCOUNT_SECRET/namespace."
+              exit 1
+            }
+
+            #################################################################################
+            #
+            # Script logic to set up eric-esoa-key-management-agent's read/write access to KMS
+            #
+            # Uses mounted KMS admin secret to:
+            #   - gain admin access to KMS
+            #   - create a KMS policy granting read/write access to our chosen credential path
+            #   - create a KMS role assigning eric-esoa-key-management-agent's service account
+            #     (by name and namespace) to that policy
+            #
+            #################################################################################
+
+            # Log in to KMS with the eric-sec-key-management-admin account and retrieve
+            # a service-credentials token
+            separator
+            CREDENTIALS_ROLE='service-credentials'
+            ADMIN_ACCOUNT='eric-sec-key-management-admin'
+            log "Logging in to KMS with role \"$CREDENTIALS_ROLE\" and service account \"$ADMIN_ACCOUNT\""
+
+            KMS_LOGIN_RESPONSE=$(\
+              curlKms --request POST \
+                'https://eric-sec-key-management:8200/v1/auth/kubernetes/login' \
+                --data '{"role":"'"$CREDENTIALS_ROLE"'", "jwt":"'"$(cat /run/secrets/$ADMIN_ACCOUNT/token)"'"}' \
+            ) || {
+              separator error
+              log error 'Error encountered logging in to KMS (eric-sec-key-management):'
+              log error "$KMS_LOGIN_RESPONSE"
+              exit 1
+            }
+            LOGIN_STATUS=$(echo "$KMS_LOGIN_RESPONSE" | grep "HTTP/")
+            [[ $LOGIN_STATUS = *"200"* ]] || {
+              separator error
+              log error "KMS login failed - response was:"
+              log error "$KMS_LOGIN_RESPONSE"
+              exit 1
+            }
+
+            KMS_CREDENTIAL_TOKEN_ADMIN="$(\
+              echo "$KMS_LOGIN_RESPONSE" \
+              | grep -e '^{' | tr ',' '\n' \
+              | sed -n 's/.*"client_token":"\(.*\)"/\1/p'\
+            )"
+            LOG_USERNAME="$CREDENTIALS_ROLE"
+            log "KMS login successful - retrieved KMS client_token for role \"$CREDENTIALS_ROLE\""
+
+            # Get the unlimited admin token stored by ADP at
+            # service-credentials/eric-sec-key-management-admin/credentials
+            separator
+            log "Retrieving unlimited admin token"
+            KMS_GET_RESPONSE=$(\
+              curlKms --header "X-Vault-Token: $KMS_CREDENTIAL_TOKEN_ADMIN" --request GET \
+              'https://eric-sec-key-management:8200/v1/secret-v2/data/service-credentials/eric-sec-key-management-admin/credentials' \
+            ) || {
+              separator error
+              log error 'Error encountered retrieving admin token from KMS (eric-sec-key-management)'
+              log error "$KMS_LOGIN_RESPONSE"
+              exit 1
+            }
+            GET_STATUS=$(echo "$KMS_GET_RESPONSE" | grep "HTTP/")
+            [[ $GET_STATUS = *"200"* ]] || {
+              separator error
+              log error "Token retrieval failed - response was:"
+              log error "$KMS_GET_RESPONSE"
+              exit 1
+            }
+
+            KMS_ADMIN_TOKEN="$(\
+              echo "$KMS_GET_RESPONSE" \
+              | grep -e '^{' \
+              | tr ',' '\n' \
+              | sed -n 's/"data":{"data":{"token":"\(.*\)"}/\1/p'\
+            )"
+            LOG_USERNAME="root"
+            log "Successfully retrieved KMS admin client_token"
+
+            # Create KMS policy to grant read/write access to our chosen KMS path
+            separator
+            log "Creating KMS policy to grant read/write access to KMS path \"$KMS_STORAGE_PATH\""
+            KMS_CREATE_POLICY_RESPONSE=$(\
+              curlKms --header "X-Vault-Token: $KMS_ADMIN_TOKEN" --request POST \
+              'https://eric-sec-key-management:8200/v1/sys/policy/'"$KMS_READ_WRITE_POLICY_NAME" \
+              --data '{"policy": "path \"'"$KMS_STORAGE_PATH"'\" { capabilities = [\"create\", \"read\", \"update\", \"delete\"]}"}' \
+            ) || {
+              separator error
+              log error 'Error encountered creating read/write policy in KMS (eric-sec-key-management):'
+              log error "$KMS_CREATE_POLICY_RESPONSE"
+              exit 1
+            }
+            CREATE_POLICY_STATUS=$(echo "$KMS_CREATE_POLICY_RESPONSE" | grep "HTTP/")
+            [[ $CREATE_POLICY_STATUS = *"204"* ]] || {
+              separator error
+              log error "Failed to create read/write KMS policy - response was:"
+              log error "$KMS_CREATE_POLICY_RESPONSE"
+              exit 1
+            }
+            log "Policy \"$KMS_READ_WRITE_POLICY_NAME\" created successfully"
+
+            # Create KMS role to bind the read/write policy to our mounted service account
+            separator
+            log "Creating KMS role to bind read/write policy \"$KMS_READ_WRITE_POLICY_NAME\" to service account \"$SERVICE_ACCOUNT_NAME\" in namespace \"$SERVICE_ACCOUNT_NAMESPACE\""
+
+            # Have to create unique role per service account - no way to update roles.
+            # Alternative is a lot of getting and parsing to check if the role already exists
+            #   and merge our service account details into the values,
+            #   so not going to those lengths
+            KMS_MANAGER_ROLE_NAME="$KMS_MANAGER_ROLE_PREFIX"'_'"$SERVICE_ACCOUNT_NAME"
+            log "Creating role \"$KMS_MANAGER_ROLE_NAME\""
+            KMS_CREATE_ROLE_RESPONSE=$(\
+              curlKms --header "X-Vault-Token: $KMS_ADMIN_TOKEN" --request POST \
+                'https://eric-sec-key-management:8200/v1/auth/kubernetes/role/'"$KMS_MANAGER_ROLE_NAME" \
+                --data '{"bound_service_account_names": "'"$SERVICE_ACCOUNT_NAME"'", "bound_service_account_namespaces": "'"$SERVICE_ACCOUNT_NAMESPACE"'", "policies": ["'"$KMS_READ_WRITE_POLICY_NAME"'"], "max_ttl": 1800000}'\
+            ) || {
+              separator error
+              log error 'Error encountered creating manager role for $SERVICE_ACCOUNT_NAME in KMS (eric-sec-key-management)'
+              log error "$KMS_CREATE_ROLE_RESPONSE"
+              exit 1
+            }
+            CREATE_ROLE_STATUS=$(echo "$KMS_CREATE_ROLE_RESPONSE" | grep "HTTP/")
+            [[ $CREATE_ROLE_STATUS = *"204"* ]] || {
+              separator error
+              log error "Failed to create KMS manager role for $SERVICE_ACCOUNT_NAME - response was:"
+              log error "$KMS_CREATE_ROLE_RESPONSE"
+              exit 1
+            }
+            log "Role \"$KMS_MANAGER_ROLE_NAME\" created successfully"
+
+            echo
+
+            SUCCESS_MESSAGE=" SUCCESS "
+            TERMINAL_WIDTH=$(tput -T xterm cols)
+            STAR_COUNT=$(((TERMINAL_WIDTH - ${#SUCCESS_MESSAGE}) / 2))
+            STAR_SEGMENT="$(head -c "$STAR_COUNT" < /dev/zero | tr "\0" "*")"
+            STAR_LINE="\e[32m$STAR_SEGMENT$SUCCESS_MESSAGE$STAR_SEGMENT\e[0m"
+            echo -e "$STAR_LINE"
+            log "Service account $SERVICE_ACCOUNT_NAME has been granted $KMS_READ_WRITE_POLICY_NAME access in KMS"
+            echo -e "$STAR_LINE"
+          resources:
+          {{- with index .Values "resources" "kms-access-setup" }}
+            {{ toYaml . | indent 12 | trim }}
+          {{- end }}
+          volumeMounts:
+          - name: kms-ca-cert
+            mountPath: /run/secrets/kms-ca-cert
+          - name: eric-sec-key-management-admin
+            mountPath: /run/secrets/eric-sec-key-management-admin
+          - name: {{ template "eric-esoa-key-management-agent.serviceAccountSecretName" . }}
+            mountPath: /run/secrets/{{ template "eric-esoa-key-management-agent.serviceAccountSecretName" . }}
+      {{- if index .Values "podPriority" "eric-esoa-key-management-agent" "priorityClassName" | quote }}
+      priorityClassName: {{ index .Values "podPriority" "eric-esoa-key-management-agent" "priorityClassName" | quote }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations: {{- include "eric-esoa-so-library-chart.tolerations" . | indent 8 }}
+      {{- end }}
+      volumes:
+      - name: kms-ca-cert
+        secret:
+          optional: false
+          secretName: eric-sec-sip-tls-trusted-root-cert
+          items:
+            - key: {{ .Values.certificate.cacert.key }}
+              path: {{ .Values.certificate.cacert.filePath }}
+      - name: eric-sec-key-management-admin
+        secret:
+          optional: false
+          secretName: eric-sec-key-management-admin
+      - name: {{ template "eric-esoa-key-management-agent.serviceAccountSecretName" . }}
+        secret:
+          optional: false
+          secretName: {{ template "eric-esoa-key-management-agent.serviceAccountSecretName" . }}
+      {{- if .Values.nodeSelector}}
+      nodeSelector: {{ toYaml .Values.nodeSelector | nindent 8}}
+      {{- else if .Values.global }}
+        {{- if .Values.global.nodeSelector }}
+      nodeSelector: {{ toYaml .Values.global.nodeSelector | nindent 8 }}
+        {{- end}}
+      {{- end}}

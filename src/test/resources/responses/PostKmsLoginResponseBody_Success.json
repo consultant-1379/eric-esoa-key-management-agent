@@ -1,0 +1,33 @@
+{
+  "request_id": "c1ad99b5-e614-b66c-06ce-7c4c23852a97",
+  "lease_id": "",
+  "renewable": false,
+  "lease_duration": 0,
+  "data": null,
+  "wrap_info": null,
+  "warnings": null,
+  "auth": {
+    "client_token": "s.5kYQ30dwI8lHnPhk5uOshvRX",
+    "accessor": "oBBHvb2xuJKzF7U0esflgxp0",
+    "policies": [
+      "default",
+      "service-credentials"
+    ],
+    "token_policies": [
+      "default",
+      "service-credentials"
+    ],
+    "metadata": {
+      "role": "service-credentials",
+      "service_account_name": "eric-sec-key-management-admin",
+      "service_account_namespace": "so-team-mega",
+      "service_account_secret_name": "eric-sec-key-management-admin",
+      "service_account_uid": "21466f05-4b61-469c-b9a7-6b0dc25888fd"
+    },
+    "lease_duration": 1800,
+    "renewable": true,
+    "entity_id": "0b2da420-dedf-19a5-c2f4-0dc21f3b4546",
+    "token_type": "service",
+    "orphan": true
+  }
+}

@@ -1,0 +1,282 @@
+#
+# COPYRIGHT Ericsson 2022-2024
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+openapi: "3.0.2"
+info:
+  x-api-id: 3cbaaada-9717-46c2-965c-a3a862ae18e2
+  x-audience: external-public
+  description: 'Key Management Agent API.
+  This API allows an external client/user to store, delete, modify its sensitive credential data in Key Management Service (KMS).
+  The KMS Agent interface allows us to wrap, filter and protect the access to KMS for external users'
+  version: "0.0.2"
+  title: "Key Management Agent"
+  license:
+    name: "COPYRIGHT Ericsson 2023"
+    url: "https://www.ericsson.com/en/legal"
+  termsOfService: "https://www.ericsson.com/en/legal"
+  contact:
+    name: Team Saiyan
+    email: "PDLDUOSSTE@pdl.internal.ericsson.com"
+servers:
+  - url: http://{hostname}/{basePath}
+    variables:
+      hostname:
+        default: eric-esoa-key-management-agent
+      basePath:
+        default: v1
+tags:
+  - name: "Configuration credentials"
+    description: "Protect sensitive credential information used in application external configuration"
+
+paths:
+  /configuration/credentials:
+    post:
+      summary: 'Store a new Credential in KMS for the given credential key and credential value pair.'
+      operationId: storeCredential
+      description: 'Stores the given credential value in Key Management Service (KMS) for the logged in tenant making the request. The
+      credential value is stored securely in KMS and a credential reference value is returned to the user. This reference should be used in all
+      subsequent requests to update the credential value or to delete the credential completely from the store.
+      The format of the credential reference returned is a path constructed by the KMS Agent in the form {tenant}/{credential-key}.
+      The {tenant} is the logged in tenant making the request and {credential-key} is the user defined path provided in the request body.
+      The KMS Agent will delegate this request to the internal KMS Store KV Secret API to store the given credential value as a 
+      KMS secret. Only the logged in tenant making this request can perform subsequent update and delete requests on this credential.
+      Clients can use this interface to protect sensitive credential data to be used in their external configuration files.
+      '
+      requestBody:
+        description: 'The body contains the credential data for the request and is comprised of the credential key and
+        credential value to be protected.
+        The credential-key is a path-like string and is used to construct the reference to the location in KMS
+        of the stored credential-value.
+        Note that in KMS service static secrets are laid out like a virtual filesystem and users should consider a
+        path scheme or convention for the credential-key in order to structure their secrets.'
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoreCredentialRequestBody'
+            examples:
+              network-element-1:
+                value:
+                  credentialKey: /service-1/ne-upf-1/ne-password-1
+                  credentialValue: upf*Password!10!
+              network-element-2:
+                value:
+                  credentialKey: /service-1/ne-upf-2/ne-password-1
+                  credentialValue: upf*Pass1000xxxx!
+              ansible-node:
+                value:
+                  credentialKey: /smf/playbook-inputs/day1/password
+                  credentialValue: er,ic,SSon1!
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  credentialReference:
+                    type: string
+                    description: 'The credential reference is a path-like string and is used to uniquely identify the
+                    stored value in KMS. The format of the credentialReference is {tenant}/{credential-key}, where
+                    the tenant is the name of the tenant making the request and credential-key is the user defined key
+                    value provided in the request body.'
+              examples:
+                ne-password-reference:
+                  value:
+                    credentialReference: tenant/service-1/ne-upf-1/ne-password
+        '400':
+          description: Bad Request
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Forbidden
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Conflict
+          $ref: '#/components/responses/Conflict'
+        '500':
+          description: Internal Server Error
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: Service Unavailable
+          $ref: '#/components/responses/ServiceUnavailable'
+      tags:
+        - Configuration credentials
+
+    put:
+      summary: 'Update an existing credential value in KMS. '
+      operationId: updateCredential
+      description: 'Updates the stored credential value identified by the provided credential reference,
+      to the new value provided in the request body. The credential must already exist in KMS for the PUT
+      request to succeed.'
+      parameters:
+        - name: credentialReference
+          in: query
+          required: true
+          description: 'Unique reference identifier for the credential value in KMS. The credentialReference
+          value to use is returned to the user when the credential is initially stored. It takes the format
+          {credential-key}, the tenant is set to "unknown" by default as tenancy has been removed and
+          credential-key is the user defined key value provided in the request body. In example: 
+          "credentialReference=service-1/ne-upf-1/ne-password".'
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCredentialRequestBody'
+      responses:
+        '204':
+          description: 'No Content. The credential value was successfully updated.'
+        '400':
+          description: Bad Request
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Forbidden
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: Internal Server Error
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: Service Unavailable
+          $ref: '#/components/responses/ServiceUnavailable'
+
+      tags:
+        - Configuration credentials
+    delete:
+      summary: 'Delete an existing credential in KMS.'
+      description: 'Deletes the credential in KMS associated with the provided credentialReference.
+      The credentialReference value to use is returned to the user when the credential is initially stored.'
+      operationId: deleteCredential
+      parameters:
+        - name: credentialReference
+          in: query
+          required: true
+          description: 'Unique reference identifier for the credential value in KMS. The credentialReference
+          value to use is returned to the user when the credential is initially stored. It takes the format
+          {credential-key}, the tenant is set to "unknown" by default as tenancy has been removed and
+          credential-key is the user defined key value provided in the request body. 
+          In example: "credentialReference=service-1/ne-upf-1/ne-password".'
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'No Content. The credential was successfully deleted.'
+        '400':
+          description: Bad Request
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Forbidden
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: Internal Server Error
+          $ref: '#/components/responses/InternalServerError'
+        '503':
+          description: Service Unavailable
+          $ref: '#/components/responses/ServiceUnavailable'
+      tags:
+        - Configuration credentials
+
+components:
+  schemas:
+    StoreCredentialRequestBody:
+      type: object
+      description: 'Credential data comprised of the credential key and credential value.
+        The credential key forms part of the unique identifier which is constructed internally for the stored credential.
+        The credential value is the sensitive information to be protected'
+      required:
+        - credentialKey
+        - credentialValue
+      properties:
+        credentialKey:
+          description: 'Path based string which will form part of the identity of the credential information in KMS
+                     and also forms part of the credential Reference returned in the response to this request.
+                     KMS uses a path-like syntax for referencing a secret in KMS. The paths are equivalent to the hierarchy
+                     of folders and sub-folders in a file system. The secrets are stored under a path as key value pairs.
+                     Note: the credentialKey path value must be a valid URI path string as specified by the grammar
+                     in RFC 2396.'
+          type: string
+        credentialValue:
+          description: 'The sensitive data to be protected. This value is stored securely in KMS. Can be accessed only by
+           using the KMS reference returned when the credential was stored.'
+          type: string
+
+    UpdateCredentialRequestBody:
+      type: object
+      description: 'Request body containing a new value to update for an existing stored credential'
+      required:
+        - credentialValue
+      properties:
+        credentialValue:
+          description: 'The protected data value to be updated.'
+          type: string
+
+    ProblemDetails:
+      required:
+        - type
+        - status
+        - detail
+      type: object
+      properties:
+        type:
+          description: 'A URI reference [RFC3986] that identifies the problem type.'
+          type: string
+        title:
+          description: 'A short, human-readable summary of the problem type.'
+          type: string
+        status:
+          description: 'The HTTP status code generated by the server'
+          type: integer
+        detail:
+          description: 'A human-readable explanation specific to this occurrence of the problem.'
+          type: string
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    InternalServerError:
+      description: Internal Server Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    ServiceUnavailable:
+      description: Service Unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'

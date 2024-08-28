@@ -1,0 +1,117 @@
+#
+# COPYRIGHT Ericsson 2023-2024
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+server:
+  address: 0.0.0.0
+  port: 8080
+  ssl:
+   port: 8443
+
+hosts:
+  key-management-service:
+    base-url: https://eric-sec-key-management:8200
+    kv-engine:
+      base-path: /v1/secret-v2/data/
+
+# Remove H2 from compile scope
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+  cloud:
+    vault:
+      enabled: true
+      host: ${VAULT_HOST:localhost}
+      port: ${VAULT_PORT:8200}
+      scheme: http
+      authentication: KUBERNETES
+      kubernetes:
+        role: ${VAULT_USER_ROLE:credentials-manager_eric-esoa-key-management-agent}
+        kubernetes-path: kubernetes
+        service-account-token-file: ${SERVICE_ACCOUNT_TOKEN:src/test/resources/service-account/service-account.yml}
+      ssl:
+        trust-store: null
+        trust-store-password: null
+      config:
+        order: -10
+      connection-timeout: 5000
+      read-timeout: 15000
+      generic:
+        enabled: false
+      kv:
+        enabled: false
+
+key-management-agent:
+  retry-policy:
+    # reduce for dev test to speed up execution
+    attempts: 2
+    backoffDelay: 1
+
+
+#Metrics related configurations
+management.endpoint.metrics.enabled: "true"
+management.endpoints.web.exposure.include: "*"
+management.endpoint.prometheus.enabled: "true"
+management:
+  prometheus:
+    metrics:
+      export:
+        enabled: "true"
+management.info.env.enabled: "true"
+management.health.vault.enabled: false
+
+endpoints.health.sensitive: "false"
+info.app.name: '@name@'
+info.app.description: Key Management Service Agent
+info.app.version: '@version@'
+info.app.legal: "COPYRIGHT Ericsson 2023 -
+ The copyright to the computer program(s) herein is the property of
+ Ericsson Inc. The programs may be used and/or copied only with written
+ permission from Ericsson Inc. or in accordance with the terms and
+ conditions stipulated in the agreement/contract under which the
+ program(s) have been supplied."
+logging:
+  config: ${LOGBACK_CONFIG_FILE:classpath:logback-json.xml}
+  level:
+    # Turn off logs for Http11Input buffer to prevent logging client credential values
+    org.apache.coyote.http11.Http11InputBuffer: OFF
+    # Set logs for RequestResponseBodyMethodProcessor to INFO level to prevent logging client credential values
+    org.springframework.web.servlet.mvc.method.annotation.RequestResponseBodyMethodProcessor: INFO
+    # Set logs for JWTDecoder to INFO level to prevent logging client credential values
+    com.ericsson.oss.orchestration.eo.security.JWTDecoder: INFO
+
+kms:
+  path: "secret-v2/data/credentials/"
+
+security:
+  config:
+    mountPath: src/test/resources/app/config/truststore.yaml
+  cryptoStoreParams:
+    keyPass: "Y2hhbmdlaXQ="
+    storePass: "Y2hhbmdlaXQ="
+    keyAlias: keyManagementService
+    keyStoreType: JKS
+  tls:
+    enabled: ${SECURITY_TLS_ENABLED:false}
+  scheme: ${SECURITY_SCHEME:http}
+  keystore:
+    path: src/test/resources/tmp/keystore.jks
+    tlsCertDirectory: ${TLS_CERT_DIRECTORY:src/test/resources/secrets/eric-esoa-key-management-agent-int-cert/}
+    tlsCertFile: ${TLS_CERT_FILE:tls.crt}
+    tlsKeyFile: ${TLS_KEY_FILE:tls.key}
+  renewCertRetry:
+    delay: ${CERT_RENEW_RETRY_DELAY:10000}
+    times: ${CERT_RENEW_RETRY_COUNT:6}

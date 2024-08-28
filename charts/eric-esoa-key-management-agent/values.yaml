@@ -1,0 +1,270 @@
+#
+# COPYRIGHT Ericsson 2023-2024
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+# Default values for eric-esoa-key-management-agent.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+global:
+  hosts:
+    iam: "iam.ericsson.com"
+  systemUser:
+    secret: eric-esoa-system-user-secret
+    userKey: system-user
+    passwordKey: system-user-pwd
+
+defaults:
+  iam:
+    clientId: "eo"
+    adminSecret: eric-sec-access-mgmt-creds
+    userKey: kcadminid
+    passwordKey: kcpasswd
+    cacert:
+      secretName: iam-cacert-secret
+      key: tls.crt
+      filePath: iam/ca.crt
+
+#  timezone: UTC
+#  registry:
+#    url: armdocker.rnd.ericsson.se
+#    pullPolicy: IfNotPresent
+#  #Secret must be manually created in the namespace, no default value
+#  pullSecret: eric-adp-example-secret
+#  fsGroup:
+#    manual: 10000
+#    namespace: true
+#  # The IP family the service belongs to when service.type is set to ClusterIP.
+#  # Options are: IPv4, IPv6
+#  internalIPFamily:
+#  security:
+#    policyBinding:
+#      create: true
+#    policyReferenceMap:
+#      default-restricted-security-policy: "<restricted security policy at customer deployment>"
+#    tls:
+#      enabled: true
+
+replicaCount: 1
+
+updateStrategy:
+ type: RollingUpdate
+ rollingUpdate:
+   maxSurge: 1
+   maxUnavailable: 0
+
+#Empty labels list for application deployment engineer to add more labels (In Compliance with DR-D1121-068).
+labels: {}
+
+imageCredentials:
+  repoPath:
+  eric-esoa-key-management-agent:
+    repoPath: # see default in eric-product-info.yaml
+    registry: {}
+      # url:
+      # overrides global registry url
+      #- Secret must be manually created in the namespace, no default value
+      # pullSecret: REPO_SECRET
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+annotations: {}
+
+service:
+  type: ClusterIP
+  port:
+    http: 80  # Changed from 80 to 8080 and spring application is hosted on 8080
+    https: 443
+  endpoints:
+    chassisapi:
+      tls:
+        enforced: required
+        verifyClientCertificate: required
+
+ingress:
+  enabled: false
+  ingressClass: OAM-IngressClass
+  hosts:
+    - host: chart-example.local
+      paths: [/]
+
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+port:
+  http: 8080
+  https: 8443
+
+
+prometheus:
+  path: /actuator/prometheus
+  scrape: true
+
+# Configuration to control upper limit of graceful termination execution time
+terminationGracePeriodSeconds: 30
+
+# Configuration of Prestop time
+preStopSeconds: 20
+
+# Configuration of average time for individual MS async call response (in milliseconds)
+awaitTerminationPeriodMilliSeconds: 60000
+
+resources:
+  eric-esoa-key-management-agent:
+    requests:
+      memory: 640Mi
+      cpu: 125m
+      ephemeral-storage: ""
+    limits:
+      memory: 1Gi
+      cpu: 500m
+      ephemeral-storage: ""
+    jvm:
+      initialMemoryAllocationPercentage: 50
+      smallMemoryAllocationMaxPercentage: 70
+      largeMemoryAllocationMaxPercentage: 50
+  keycloak-client:
+    requests:
+      memory: 100M
+      cpu: 10m
+    limits:
+      memory: 100M
+      cpu: 100m
+  api-gateway-client:
+    requests:
+      memory: 100M
+      cpu: 10m
+    limits:
+      memory: 100M
+      cpu: 100m
+  kms-access-setup:
+    requests:
+      memory: 100M
+      cpu: 10m
+    limits:
+      memory: 100M
+      cpu: 100m
+
+autoScaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+topologySpreadConstraints: [ ]
+
+tolerations: []
+
+affinity:
+  podAntiAffinity: "soft"
+  topologyKey: "kubernetes.io/hostname"
+
+probes:
+  eric-esoa-key-management-agent:
+    livenessProbe:
+      failureThreshold: 3
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      timeoutSeconds: 10
+    readinessProbe:
+      failureThreshold: 3
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      timeoutSeconds: 10
+
+## podDisruptionBudget, enables workload to be able to properly deal with voluntary disruptions
+## applicable when replicaCount is more than 1, parameters are mutually exclusive, one of them is empty and other has value 50%
+podDisruptionBudget:
+  minAvailable: "50%"
+  maxUnavailable:
+
+podPriority:
+  eric-esoa-key-management-agent:
+    priorityClassName: ""
+# choice='unconfined, runtime/default, localhost' [ default= "" ]
+# Configuration of AppArmor profile type. The following values are possible:
+# unconfined  - Indicates that there is no profile loaded.
+# runtime/default - Applies the default profile of the container engine.
+# localhost   - Applies a specific profile loaded on the host
+appArmorProfile:
+  type: ""
+
+kms:
+  credentials:
+    policyName: "credentials-management"
+    storagePath: "secret-v2/data/credentials/*"
+    rolePrefix: "credentials-manager"
+
+
+
+certificate:
+  cacert:
+    key: ca.crt
+    filePath: siptls-ca.crt
+
+vault:
+  config:
+    host: eric-sec-key-management
+    port: 8200
+    kubernetes:
+      user_role: credentials-manager_eric-esoa-key-management-agent
+      service_account_token: /var/run/secrets/kubernetes.io/serviceaccount/token
+    ssl:
+      trust_store_file: /var/lib/ca-certificates/java-cacerts
+
+security:
+  config:
+    mountPath: /app/config/
+    fileName: truststore.yaml
+  keystore:
+    path: ${java.io.tmpdir}/keystore.jks
+    keyStoreSecretName: eric-esoa-key-management-agent-int-cert
+    tlsCertDirectory: /var/run/secrets/eric-esoa-key-management-agent-int-cert/
+    tlsCertFile: tls.crt
+    tlsKeyFile: tls.key
+
+  truststore:
+    path: ${java.io.tmpdir}/truststore.jks
+    caCertDirectory: /var/run/secrets/truststore/
+    certificates:
+      - secretName: eric-sec-sip-tls-trusted-root-cert
+        fileName: ca.crt
+      - secretName: eric-pm-server-ca
+        fileName: client-cacertbundle.pem
+      - secretName: eric-bos-esoa-common-client-ca-secret
+        fileName: ca.crt
+
+  renewCertRetry:
+    delay: 10000
+    times: 6
+server:
+  max-http-header-size: 15KB
+
+portal:
+  proxyValue: eric-esoa-so-key-management-agent-httpproxy

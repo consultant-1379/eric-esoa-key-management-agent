@@ -1,0 +1,163 @@
+#
+# COPYRIGHT Ericsson 2023-2024
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+# Remove H2 from compile scope
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: ${GRACEFUL_SHUTDOWN_TIMEOUT:30s}
+  task:
+    execution:
+      shutdown:
+        await-termination: true
+        await-termination-period: ${AWAIT_TERMINATION_PERIOD:60000}
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+  cloud:
+    vault:
+      enabled: true
+      host: ${VAULT_HOST:eric-sec-key-management}
+      port: ${VAULT_PORT:8200}
+      scheme: https
+      authentication: KUBERNETES
+      kubernetes:
+        role: ${VAULT_USER_ROLE:credentials-manager_eric-esoa-key-management-agent}
+        kubernetes-path: kubernetes
+        service-account-token-file: ${SERVICE_ACCOUNT_TOKEN:/var/run/secrets/kubernetes.io/serviceaccount/token}
+      ssl:
+        trust-store: file:${TRUST_STORE_FILE:/var/lib/ca-certificates/java-cacerts}
+        trust-store-password: ${TRUST_STORE_PASSWORD:changeit}
+      config:
+        order: -10
+      connection-timeout: 5000
+      read-timeout: 15000
+      generic:
+        enabled: false
+      kv:
+        enabled: false
+
+server:
+  port: 8080
+  ssl:
+    port: 8443
+
+endpoints.health.sensitive: "false"
+info.app.name: '@name@'
+info.app.description: Key Management Service Agent
+info.app.version: '@version@'
+info.app.legal: "COPYRIGHT Ericsson 2023 -
+ The copyright to the computer program(s) herein is the property of
+ Ericsson Inc. The programs may be used and/or copied only with written
+ permission from Ericsson Inc. or in accordance with the terms and
+ conditions stipulated in the agreement/contract under which the
+ program(s) have been supplied."
+
+#See more details about pattern layout: https://logging.apache.org/log4j/1.2/apidocs/org/apache/log4j/PatternLayout.html
+#See more details about logging.pattern.level : https://docs.spring.io/spring-boot/docs/2.5.2/reference/html/features.html#features.logging.custom-log-configuration
+#logging.pattern.level: "%5p [%X{X-B3-TraceId:-},%X{X-B3-SpanId:-},%X{X-Span-Export:-}][%X{userName}]"
+
+#Set the stubrunner credentials:
+#stubrunner.username: <LAN SIGNUM ID>
+#stubrunner.password: <LAN encripted PWD or JFrog API Key>
+stubrunner.username: ${SELI_ARTIFACTORY_REPO_USER}
+stubrunner.password: ${SELI_ARTIFACTORY_REPO_PASS}
+
+logging:
+  config: ${LOGBACK_CONFIG_FILE:classpath:logback-json.xml}
+  endpoints:
+    exclude: /actuator/health, /ping, /metric
+  level:
+    # Turn off logs for Http11Input buffer to prevent logging client credential values
+    org.apache.coyote.http11.Http11InputBuffer: OFF
+    # Set logs for RequestResponseBodyMethodProcessor to INFO level to prevent logging client credential values
+    org.springframework.web.servlet.mvc.method.annotation.RequestResponseBodyMethodProcessor: INFO
+    # Set logs for JWTDecoder to INFO level to prevent logging client credential values
+    com.ericsson.oss.orchestration.eo.security.JWTDecoder: INFO
+
+#KMS
+kms:
+  path: "secret-v2/data/credentials/"
+
+#Metrics related configurations
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, loggers, metrics, prometheus
+      base-path: /actuator
+  endpoint:
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+    health:
+      group:
+        liveness:
+          include:
+            - ping
+            - diskSpace
+            - livenessState
+        readiness:
+          include:
+            - readinessState
+      probes:
+        enabled: true
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    enable:
+      jvm: true
+    distribution:
+      percentiles-histogram:
+        http:
+          server:
+            requests: true
+      sla:
+        http:
+          server:
+            requests: 100ms,300ms,500ms
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+    vault:
+      enabled: false
+
+key-management-agent:
+  retry-policy:
+    attempts: 3
+    backoffDelay: 5000
+
+security:
+  cryptoStoreParams:
+    keyPass: "Y2hhbmdlaXQ="
+    storePass: "Y2hhbmdlaXQ="
+    keyAlias: subsystem-management
+    keyStoreType: JKS
+  tls:
+    enabled: ${SECURITY_TLS_ENABLED:false}
+  scheme: ${SECURITY_SCHEME:http}
+  keystore:
+    path: /tmp/keystore.jks
+    tlsCertDirectory: ${TLS_CERT_DIRECTORY:/var/run/secrets/eric-esoa-key-management-agent-int-cert/}
+    tlsCertFile: ${TLS_CERT_FILE:tls.crt}
+    tlsKeyFile: ${TLS_KEY_FILE:tls.key}
+  renewCertRetry:
+    delay: ${CERT_RENEW_RETRY_DELAY:10000}
+    times: ${CERT_RENEW_RETRY_COUNT:6}

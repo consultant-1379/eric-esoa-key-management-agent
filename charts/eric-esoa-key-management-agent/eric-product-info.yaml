@@ -1,0 +1,26 @@
+#
+# COPYRIGHT Ericsson 2022
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+productName: "Key Management Agent"
+productNumber: "CXC 201 0000"
+images:
+  eric-esoa-key-management-agent:
+    productName: "Key Management Agent"
+    productNumber: "CXC 201 0001"
+    registry: "armdocker.rnd.ericsson.se"
+    repoPath: "proj-esoa-so"
+    name: "eric-esoa-key-management-agent"
+    tag: IMAGE_TAG

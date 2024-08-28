@@ -1,0 +1,42 @@
+#
+# COPYRIGHT Ericsson 2023-2024
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+# Remove H2 from compile scope
+spring:
+  cloud:
+    vault:
+      enabled: true
+      host: ${VAULT_HOST:eric-sec-key-management}
+      port: ${VAULT_PORT:8200}
+      scheme: https
+      authentication: KUBERNETES
+      kubernetes:
+        role: ${VAULT_USER_ROLE:credentials-manager_eric-esoa-key-management-agent}
+        kubernetes-path: kubernetes
+        service-account-token-file: ${SERVICE_ACCOUNT_TOKEN:./src/test/resources/service-account/tls.crt}
+      ssl:
+        trust-store: file:${TRUST_STORE_FILE:/var/lib/ca-certificates/java-cacerts}
+        trust-store-password: ${TRUST_STORE_PASSWORD:changeit}
+      config:
+        order: -10
+      connection-timeout: 5000
+      read-timeout: 15000
+      generic:
+        enabled: false
+      kv:
+        enabled: false
+
+

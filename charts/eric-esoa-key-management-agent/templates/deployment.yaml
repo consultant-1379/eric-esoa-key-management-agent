@@ -1,0 +1,230 @@
+#
+# COPYRIGHT Ericsson 2023-2024
+#
+#
+#
+# The copyright to the computer program(s) herein is the property of
+#
+# Ericsson Inc. The programs may be used and/or copied only with written
+#
+# permission from Ericsson Inc. or in accordance with the terms and
+#
+# conditions stipulated in the agreement/contract under which the
+#
+# program(s) have been supplied.
+#
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "eric-esoa-key-management-agent.fullname" . }}
+  annotations:
+  {{- include "eric-esoa-so-library-chart.annotations" . | nindent 4 }}
+  labels:
+  {{- include "eric-esoa-so-library-chart.labels" . | nindent 4 }}
+spec:
+{{- if not .Values.autoScaling.enabled }}
+  replicas: {{ include "eric-esoa-so-library-chart.replicas" . }}
+{{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "eric-esoa-so-library-chart.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  strategy:
+    type: {{ .Values.updateStrategy.type | quote }}
+    {{- if and (eq .Values.updateStrategy.type "RollingUpdate") .Values.updateStrategy.rollingUpdate }}
+    rollingUpdate:
+      maxUnavailable: {{ .Values.updateStrategy.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.updateStrategy.rollingUpdate.maxSurge }}
+    {{- end }}
+  template:
+    metadata:
+      annotations:
+{{- include "eric-esoa-so-library-chart.annotations" . | nindent 8 }}
+{{- include "eric-esoa-key-management-agent.container-annotations" . | indent 8 }}
+      labels:
+        eric-sec-key-management-access: "true"
+{{- include "eric-esoa-so-library-chart.labels" . | nindent 8 }}
+    spec:
+      {{- if include "eric-esoa-key-management-agent.pullSecret" . }}
+      imagePullSecrets:
+        - name: {{ include "eric-esoa-key-management-agent.pullSecret" . | quote}}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ include "eric-esoa-so-library-chart.terminationGracePeriodSeconds" . }}
+      serviceAccountName: {{ template "eric-esoa-key-management-agent.serviceAccountName" . }}
+      securityContext:
+        fsGroup: {{ include "eric-esoa-key-management-agent.fsGroup.coordinated" . }}
+      volumes:
+        - name: tmp-volume
+          emptyDir: {}
+        - name: config-volume
+          configMap:
+            defaultMode: 493
+            name: {{ include "eric-esoa-so-library-chart.name" . }}-configmap
+        - name: kms-ca-cert
+          secret:
+            optional: false
+            secretName: eric-sec-sip-tls-trusted-root-cert
+            items:
+              - key: {{ .Values.certificate.cacert.key }}
+                path: {{ .Values.certificate.cacert.filePath }}
+      {{- if eq (include "eric-esoa-so-library-chart.global-security-tls-enabled" .) "true" }}
+         {{- include "eric-esoa-so-library-chart.sip-tls-volumes.v1" .| indent 8 }}
+      {{- end }}
+      containers:
+        - name: eric-esoa-key-management-agent
+          lifecycle:
+            preStop:
+              exec:
+                command: [ "/bin/sleep", {{ .Values.preStopSeconds | quote }} ]
+          image: {{ template "eric-esoa-key-management-agent.mainImagePath" . }}
+          imagePullPolicy: {{ template "eric-esoa-key-management-agent.mainImagePullPolicy" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 40514
+            capabilities:
+              drop:
+                - all
+          volumeMounts:
+            - mountPath: /tmp
+              name: tmp-volume
+            - name: config-volume
+              mountPath: /config
+            - mountPath: /run/secrets/kms-ca-cert
+              name: kms-ca-cert
+              readOnly: true
+          {{- if eq (include "eric-esoa-so-library-chart.global-security-tls-enabled" .) "true" }}
+             {{- include "eric-esoa-so-library-chart.sip-tls-volume-mounts.v1" .| indent 12 }}
+          {{- end }}
+          ports:
+            {{- if eq (include "eric-esoa-so-library-chart.global-security-tls-enabled" .) "true" }}
+            - name: https
+              containerPort: {{ .Values.port.https }}
+              protocol: TCP
+            {{- else }}
+            - name: http
+              containerPort: {{ .Values.port.http }}
+              protocol: TCP
+            {{- end }}
+          livenessProbe:
+          {{- if (index .Values "probes" "eric-esoa-key-management-agent" "livenessProbe" "initialDelaySeconds") }}
+            {{ print "initialDelaySeconds: " (index .Values "probes" "eric-esoa-key-management-agent" "livenessProbe" "initialDelaySeconds") }}
+          {{- end }}
+          {{- if (index .Values "probes" "eric-esoa-key-management-agent" "livenessProbe" "failureThreshold") }}
+            {{ print "failureThreshold: " (index .Values "probes" "eric-esoa-key-management-agent" "livenessProbe" "failureThreshold") }}
+          {{- end }}
+          {{- if (index .Values "probes" "eric-esoa-key-management-agent" "livenessProbe" "periodSeconds") }}
+            {{ print "periodSeconds: " (index .Values "probes" "eric-esoa-key-management-agent" "livenessProbe" "periodSeconds") }}
+          {{- end }}
+          {{- if (index .Values "probes" "eric-esoa-key-management-agent" "livenessProbe" "timeoutSeconds") }}
+            {{ print "timeoutSeconds: " (index .Values "probes" "eric-esoa-key-management-agent" "livenessProbe" "timeoutSeconds") }}
+          {{- end }}
+          {{- if eq (include "eric-esoa-so-library-chart.global-security-tls-enabled" .) "true" }}
+            exec:
+              command:
+                - sh
+                - -c
+                - curl --cacert {{ .Values.security.truststore.caCertDirectory }}eric-sec-sip-tls-trusted-root-cert/ca.crt --cert {{ .Values.security.keystore.tlsCertDirectory }}tls.crt --key {{ .Values.security.keystore.tlsCertDirectory }}tls.key "https://localhost:{{ .Values.port.https }}/actuator/health/liveness"
+          {{- else }}
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+          {{- end }}
+          readinessProbe:
+          {{- if (index .Values "probes" "eric-esoa-key-management-agent" "readinessProbe" "initialDelaySeconds") }}
+            {{ print "initialDelaySeconds: " (index .Values "probes" "eric-esoa-key-management-agent" "readinessProbe" "initialDelaySeconds") }}
+          {{- end }}
+          {{- if (index .Values "probes" "eric-esoa-key-management-agent" "readinessProbe" "failureThreshold") }}
+            {{ print "failureThreshold: " (index .Values "probes" "eric-esoa-key-management-agent" "readinessProbe" "failureThreshold") }}
+          {{- end }}
+          {{- if (index .Values "probes" "eric-esoa-key-management-agent" "readinessProbe" "periodSeconds") }}
+            {{ print "periodSeconds: " (index .Values "probes" "eric-esoa-key-management-agent" "readinessProbe" "periodSeconds") }}
+          {{- end }}
+          {{- if (index .Values "probes" "eric-esoa-key-management-agent" "readinessProbe" "timeoutSeconds") }}
+            {{ print "timeoutSeconds: " (index .Values "probes" "eric-esoa-key-management-agent" "readinessProbe" "timeoutSeconds") }}
+          {{- end }}
+          {{- if eq (include "eric-esoa-so-library-chart.global-security-tls-enabled" .) "true" }}
+            exec:
+              command:
+                - sh
+                - -c
+                - curl --cacert {{ .Values.security.truststore.caCertDirectory }}eric-sec-sip-tls-trusted-root-cert/ca.crt --cert {{ .Values.security.keystore.tlsCertDirectory }}tls.crt --key {{ .Values.security.keystore.tlsCertDirectory }}tls.key "https://localhost:{{ .Values.port.https }}/actuator/health/readiness"
+          {{- else }}
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+          {{- end }}
+          env:
+          - name: JAVA_OPTS
+            value: {{ include "eric-esoa-key-management-agent.jvmHeapSettings" . }}
+          - name: TZ
+            value: {{ template "eric-esoa-key-management-agent.timezone" . }}
+          - name: SERVICE_ACCOUNT_TOKEN
+            value: {{ .Values.vault.config.kubernetes.service_account_token | quote }}
+          - name: VAULT_USER_ROLE
+            value: {{ .Values.vault.config.kubernetes.user_role | quote }}
+          - name: TRUST_STORE_FILE
+            value: {{ .Values.vault.config.ssl.trust_store_file | quote }}
+          - name: VAULT_HOST
+            value: {{ .Values.vault.config.host | quote }}
+          - name: VAULT_PORT
+            value: {{ .Values.vault.config.port | quote }}
+          - name: KMS_CACERT_FILE
+            value: {{ template "eric-esoa-key-management-agent.kmsCaCertFile" . }}
+          - name: SERVER_MAX_HTTP_REQUEST_HEADER_SIZE
+            value: {{ index .Values.server "max-http-header-size" }}
+          - name: GRACEFUL_SHUTDOWN_TIMEOUT
+            value: {{ .Values.terminationGracePeriodSeconds | default "30" }}s
+          - name: AWAIT_TERMINATION_PERIOD
+            value: {{ .Values.awaitTerminationPeriodMilliSeconds | default "60000" | quote }}
+          - name: SERVICE_ID
+            value: {{ include "eric-esoa-so-library-chart.name" . | quote }}
+
+      {{- if .Values.global }}
+        {{- if .Values.global.security }}
+          {{- if .Values.global.security.tls }}
+            {{- if .Values.global.security.tls.enabled }}
+          - name: CONNECT_MODE
+            value: "tls"
+            {{- if (eq .Values.service.endpoints.chassisapi.tls.enforced "required") }}
+          - name: TLS_MODE
+            value: "only_tls"
+            {{- if (eq .Values.service.endpoints.chassisapi.tls.verifyClientCertificate "required") }}
+          - name: TLS_CA
+            value: "ca_path"
+            {{- end }}
+            {{- end }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+          - name: SPRING_CONFIG_CUSTOM_LOCATIONS
+            value:  {{ .Values.security.config.mountPath }}{{ .Values.security.config.fileName }}
+          - name: SECURITY_SCHEME
+            {{- if eq (include "eric-esoa-so-library-chart.global-security-tls-enabled" .) "true" }}
+            value: "https"
+            {{- else }}
+            value: "http"
+            {{- end }}
+          {{- include "eric-esoa-so-library-chart.sip-tls-env-variables.v1" .| indent 10 }}
+          {{- include "eric-esoa-so-library-chart.loggingEnvVariables" .| indent 6 }}
+          resources: {{ include "eric-esoa-so-library-chart.resourceRequestsAndLimits" (dict "Values" .Values "resourceName" "eric-esoa-key-management-agent") | nindent 12 }}
+      nodeSelector: {{ include "eric-esoa-key-management-agent.nodeSelector" . | nindent 6 -}}
+
+      {{- if .Values.tolerations }}
+      tolerations: {{- include "eric-esoa-so-library-chart.tolerations" . | indent 8 }}
+      {{- end }}
+
+      {{- if (index .Values "podPriority" "eric-esoa-key-management-agent" "priorityClassName") }}
+      priorityClassName: {{ (index .Values "podPriority" "eric-esoa-key-management-agent" "priorityClassName") }}
+      {{- end }}
+
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- include "eric-esoa-so-library-chart.topologySpreadConstraints" . | indent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+        {{- include "eric-esoa-so-library-chart.pod-anti-affinity-type" . | nindent 10 }}
+
